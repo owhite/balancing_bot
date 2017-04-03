@@ -8,7 +8,8 @@ from Tkinter import *
 
 class layout:
    def __init__(self, master):
-      self.port = '/dev/cu.usbmodem1754161'
+      # self.port = '/dev/cu.usbmodem1754161'
+      self.port = '/dev/cu.blueball-DevB'
       self.serial_exists = 0
 
       try:

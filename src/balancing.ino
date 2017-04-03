@@ -14,6 +14,7 @@ PID pid(&position, &output, &target, kp, ki, kd, DIRECT);
 
 void setup() {
   Serial.begin(38400);
+  Serial1.begin(38400);  
 
   target = 180.0;
 
@@ -27,7 +28,13 @@ void setup() {
   recoverPIDfromEEPROM();
   pid.SetTunings(kp, ki, kd);
 
-  Wire.begin(I2C_MASTER, 0x00, I2C_PINS_18_19, I2C_PULLUP_EXT, I2C_RATE_100);
+  resetMPU();
+}
+
+void resetMPU() {
+  Serial1.println("resetting...");
+
+  Wire.begin(I2C_MASTER, 0x00, I2C_PINS_18_19, I2C_PULLUP_EXT, I2C_RATE_1200);
   byte c = readByte(MPU9250_ADDRESS, WHO_AM_I_MPU9250);  
   if (c == 0x71)  {  
       MPU9250SelfTest(SelfTest); 
@@ -38,52 +45,64 @@ void setup() {
       initAK8963(magCalibration);
   }
   else {
-      Serial.print("Could not connect to MPU9250: 0x");
-      Serial.println(c, HEX);
+      Serial1.print("Could not connect to MPU9250: 0x");
+      Serial1.println(c, HEX);
       while(1) ; // Loop forever if communication doesn't happen
   }
+  Serial1.println("  done");
+
+  zeroToggle = 0;
 }
 
 void loop() {  
-  if (readByte(MPU9250_ADDRESS, INT_STATUS) & 0x01) { // only enter on interrupt
-    calcYawPitchRoll();
-  }
 
-  Now = micros();
-  deltat = ((Now - lastUpdate)/1000000.0f); // set integration time by time elapsed since last filter update
-  lastUpdate = Now;
-  sum += deltat; // sum for averaging filter update rate
-  sumCount++;
-  
-  MadgwickQuaternionUpdate(ax, ay, az, gx*PI/180.0f, gy*PI/180.0f, gz*PI/180.0f,  my,  mx, mz);
-  pitch = -asin(2.0f * (q[1] * q[3] - q[0] * q[2]));
-  pitch = (pitch * 180.0f / PI) + 180;
-  position = pitch;
-  
-  ledUpdate();
-  while(!pid.Compute()); // wait to compute PID
-
-  direction = (output < 0.0) ? 1 : 2;
-  power = (pauseToggle != 1) ? 140 : 0;
-
-  setMotorPosition((uint8_t) abs(output * 10.0), direction, power,
-  (uint8_t) abs(output * 10.0), direction, power, blinkOn);
-}
-
-void ledUpdate() {
-  blinkNow = millis();
-  if ((blinkNow - blinkDelta) > blinkInterval) {
-    blinkOn = (blinkOn == 1) ? 0 : 1;
-    digitalWrite(blinkPin, blinkOn);
-    blinkDelta = blinkNow;
-    if (reportToggle == 1) {
-      Serial.print(position);
-      Serial.print(" ");
-      Serial.println(output);
+  while (Serial1.available()) {
+    char inChar = (char)Serial1.read();
+    inputString += inChar;
+    if (inChar == '\n') {
+      handle_cmd();
     }
   }
+
+  if (zeroToggle) { resetMPU(); }
+
+  MPUupdate();
+  if (pitch > target - 15.0 && pitch < target + 15.0) {
+    while(!pid.Compute()); // 30 - 400 us
+
+    direction = (output < 0.0) ? 1 : 2;
+    power = (pauseToggle != 1) ? 140 : 0;
+
+    setMotorPosition((uint8_t) abs(output), direction, power,
+		     (uint8_t) abs(output), direction, power, blinkOn);
+  }
+  else {
+    setMotorPosition((uint8_t) abs(output), direction, 0,
+		     (uint8_t) abs(output), direction, 0, 0);
+  }
+  ledUpdate();
 }
 
+void MPUupdate () {
+  if (readByte(MPU9250_ADDRESS, INT_STATUS) & 0x01) { // enter on interrupt
+    calcYawPitchRoll(); // 380 us
+
+    Now = micros();
+    // elapsed time since last filter update
+    deltat = ((Now - lastUpdate)/1000000.0f); 
+    lastUpdate = Now;
+    // needed for filter update
+    sum += deltat; 
+    sumCount++;
+  
+    MadgwickQuaternionUpdate(ax, ay, az, gx*PI/180.0f, gy*PI/180.0f, gz*PI/180.0f,  my,  mx, mz);
+    pitch = -asin(2.0f * (q[1] * q[3] - q[0] * q[2]));
+    pitch = (pitch * 180.0f / PI) + 180;
+    position = pitch;
+  }
+}
+
+// 900us
 void setMotorPosition(uint8_t speed1, uint8_t dir1, uint8_t power1,
 		      uint8_t speed2, uint8_t dir2, uint8_t power2,
 		      uint8_t LED_state) {
@@ -111,6 +130,20 @@ void setMotorPosition(uint8_t speed1, uint8_t dir1, uint8_t power1,
   delayMicroseconds(2); 
 }
 
+void ledUpdate() {
+  blinkNow = millis();
+  if ((blinkNow - blinkDelta) > blinkInterval) {
+    blinkOn = (blinkOn == 1) ? 0 : 1;
+    digitalWrite(blinkPin, blinkOn);
+    blinkDelta = blinkNow;
+    if (reportToggle == 1) {
+      Serial1.print(position);
+      Serial1.print(" ");
+      Serial1.println(output);
+    }
+  }
+}
+
 void handle_cmd() {
   inputString.trim(); // removes beginning and ending white spaces
   int idx = inputString.indexOf(' ');   
@@ -119,66 +152,67 @@ void handle_cmd() {
 
   if ((cmd.length() > 0)) {
     if (cmd.equals("probe_device")) {
-      Serial.println("balancing");
+      Serial1.println("balancing");
     }
     if (cmd.equals("p")) {
-      Serial.println("toggle pause");
+      Serial1.println("toggle pause");
       pauseToggle = (pauseToggle == 1) ? 0 : 1;
     }
     if (cmd.equals("zero")) {
-      Serial.println("zero system");
+      Serial1.println("zero system");
+      zeroToggle = 1;
     }
     if (cmd.equals("report")) {
-      Serial.println("report toggle");
+      Serial1.println("report toggle");
       reportToggle = (reportToggle == 1) ? 0 : 1;
     }
     if (cmd.equals("F")) {
-      Serial.println("forward");
+      Serial1.println("forward");
     }
     if (cmd.equals("write")) {
-      Serial.println("write to EEPROM");
+      Serial1.println("write to EEPROM");
       writetoEEPROM();
     }
     if (cmd.equals("reset")) {
-      Serial.println("EEPROM get PIDs");
+      Serial1.println("EEPROM get PIDs");
       recoverPIDfromEEPROM();
     }
     if (cmd.equals("get_PIDs")) {
-      Serial.print(kp);
-      Serial.print(" ");
-      Serial.print(ki);
-      Serial.print(" ");
-      Serial.println(kd);
+      Serial1.print(kp);
+      Serial1.print(" ");
+      Serial1.print(ki);
+      Serial1.print(" ");
+      Serial1.println(kd);
     }
     if (cmd.equals("B")) {
-      Serial.println("set blink rate"); // good way to tell it's alive
+      Serial1.println("set blink rate"); // good way to tell it's alive
       blinkInterval = value.toInt();
     }
     if (cmd.equals("P")) {
-      Serial.print("set P ");
+      Serial1.print("set P ");
       kp = value.toFloat();
       pid.SetTunings(kp, ki, kd);
-      Serial.println(kp);
+      Serial1.println(kp);
     }
     if (cmd.equals("I")) {
-      Serial.print("set I ");
+      Serial1.print("set I ");
       ki = value.toFloat();
       pid.SetTunings(kp, ki, kd);
-      Serial.println(ki);
+      Serial1.println(ki);
     }
     if (cmd.equals("D")) {
-      Serial.print("set D ");
+      Serial1.print("set D ");
       kd = value.toFloat();
       pid.SetTunings(kp, ki, kd);
-      Serial.println(kd);
+      Serial1.println(kd);
     }
     inputString = "";
   }
 }
 
 void serialEvent() {
-  while (Serial.available()) {
-    char inChar = (char)Serial.read();
+  while (Serial1.available()) {
+    char inChar = (char)Serial1.read();
     inputString += inChar;
     if (inChar == '\n') {
       handle_cmd();

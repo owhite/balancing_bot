@@ -20,13 +20,17 @@ enum Mscale {
   MFS_16BITS      // 0.15 mG per LSB
 };
 
+int bluetoothRx = 0;
+int bluetoothTx = 1;
+
 double position, output, target;
 double kp, ki, kd;
 
 uint8_t  power = 140;
 uint8_t  direction = 1;
-uint8_t  pauseToggle = 0;
+uint8_t  pauseToggle = 1;
 uint8_t  reportToggle = 0;
+uint8_t  zeroToggle = 0;
 
 uint8_t  blinkNormal = 1000;
 uint8_t  blinkTilted = 100;
