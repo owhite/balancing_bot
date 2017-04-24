@@ -8,15 +8,20 @@
 #include "MPU9250_helpers.h"
 #include "PID_v1.h"
 
+uint32_t tmp1;
+uint32_t tmp2;
+uint32_t tmp3;
+
 PID pid(&position, &output, &target, kp, ki, kd, DIRECT);
 
 #include "eeprom_helpers.h"
+
 
 void setup() {
   Serial.begin(38400);
   Serial1.begin(38400);  
 
-  target = 180.0;
+  target = defaultTarget;
 
   inputString.reserve(200);
 
@@ -29,6 +34,43 @@ void setup() {
   pid.SetTunings(kp, ki, kd);
 
   resetMPU();
+}
+
+void loop() {  
+
+  while (Serial1.available()) {
+    char inChar = (char)Serial1.read();
+    inputString += inChar;
+    if (inChar == '\n') {
+      handle_cmd();
+    }
+  }
+
+  if (zeroToggle) { resetMPU(); }
+
+  tmp2 = micros();
+  MPUupdate();
+  tmp1 = micros();
+
+  double diff = abs(pitch - target);
+
+  pid.Compute();
+
+  tmp3 = tmp1 - tmp2;
+  Serial.print(position);
+  Serial.print(" ");
+  Serial.print(output);
+  Serial.print(" ");
+  Serial.println(tmp3);
+
+  direction = (output < 0.0) ? 1 : 2;
+
+  power = 140 * pauseToggle;
+
+  // ledUpdate();
+
+  //  setMotorPosition((uint8_t) abs(output), direction, power,
+  //		   (uint8_t) abs(output), direction, power, blinkOn);
 }
 
 void resetMPU() {
@@ -52,35 +94,6 @@ void resetMPU() {
   Serial1.println("  done");
 
   zeroToggle = 0;
-}
-
-void loop() {  
-
-  while (Serial1.available()) {
-    char inChar = (char)Serial1.read();
-    inputString += inChar;
-    if (inChar == '\n') {
-      handle_cmd();
-    }
-  }
-
-  if (zeroToggle) { resetMPU(); }
-
-  MPUupdate();
-  if (pitch > target - 15.0 && pitch < target + 15.0) {
-    while(!pid.Compute()); // 30 - 400 us
-
-    direction = (output < 0.0) ? 1 : 2;
-    power = (pauseToggle != 1) ? 140 : 0;
-
-    setMotorPosition((uint8_t) abs(output), direction, power,
-		     (uint8_t) abs(output), direction, power, blinkOn);
-  }
-  else {
-    setMotorPosition((uint8_t) abs(output), direction, 0,
-		     (uint8_t) abs(output), direction, 0, 0);
-  }
-  ledUpdate();
 }
 
 void MPUupdate () {
@@ -137,6 +150,8 @@ void ledUpdate() {
     digitalWrite(blinkPin, blinkOn);
     blinkDelta = blinkNow;
     if (reportToggle == 1) {
+      Serial1.print(target);
+      Serial1.print(" ");
       Serial1.print(position);
       Serial1.print(" ");
       Serial1.println(output);
@@ -187,6 +202,18 @@ void handle_cmd() {
     if (cmd.equals("B")) {
       Serial1.println("set blink rate"); // good way to tell it's alive
       blinkInterval = value.toInt();
+    }
+    if (cmd.equals("upscale")) {
+      Serial1.print("upscale ");
+      float x = value.toFloat();
+      Serial1.println(x);
+      target = defaultTarget + x;
+    }
+    if (cmd.equals("downscale")) {
+      Serial1.print("downscale ");
+      float x = value.toFloat();
+      Serial1.println(x);
+      target = defaultTarget - x;
     }
     if (cmd.equals("P")) {
       Serial1.print("set P ");
